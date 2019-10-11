@@ -1,0 +1,137 @@
+---
+title: 'Practical Machine Learning Course Project, by Daniel Roy '
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+This project's goal is to perform some machine learning tasks on some fitness data, in order to be able to predict as closely as possible the "classe" value. The raw data can be found at http://groupware.les.inf.puc-rio.br/har. The raw data consists 19622 observations of 160 variables. 
+
+## Executive Summary
+After analysing and processing the data, it was found that the best machine learning algorithm that I could find is with the "Caret" R package, with method "svmRadial". With the initial data split 70% (training)- 30% (testing), the testing data accuracy reached was about 93%. The number of predictor variables was 49.
+
+Note that a number of methods were tested, and none achieved such high accuracy rate. For example, I tried "random forest", "linear discriminant analysis", "Recursive Partitioning And Regression Trees", "multinomial logistic regression", ... In order to test these various models, most of the variables had to be modified from numeric to factors (using the function "cut2"), but this was not necessary for the "svmRadial" method. 
+
+## Data Analysis/Preparation
+
+A lot of raw data analysis and transformation was performed in order to make the number of predictors more manageable. Here are some of the data transformations that were performed:
+- For cross-validation purposes, the "training" dataset was split 70%-30%, with the 30% ("testing") intended to validate the findings with the 70% data ("training"). I chose this strategy since the sample size is large enough to accomodate it. In case where the sample size would have been smaller, other cross-validation strategies such as K-fold or leave-1-out cross-validation could have been used.  
+- The variables having no predictive value were removed (user_name, timestamps, ...)  
+- The variables having more than 90% missing values were removed  
+- The variables not having enough distinct values were removed. Those were identified with the R command "summary", and with the Caret function "nearZeroVar"  
+- The variables stored as factors were re-stored as numeric, in order for their handling be easier by Caret  
+
+Here is the code to achieve this:
+
+```{r}
+pmltrain <- read.csv("C:\\OnlineCourses\\DataScienceSpecialization\\8- Machine Learning\\pml-training.csv")
+library(caret)
+inTrain <- createDataPartition(y=pmltrain$classe, p=0.7, list=FALSE)
+training <- pmltrain[inTrain, ]
+testing <- pmltrain[-inTrain, ]
+
+# Let's get rid of columns related to time, and username:
+training <- subset(training, select = -c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp))
+testing <- subset(testing, select = -c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp))
+
+# Let's get rid of columns with more than 90% NAs:
+for(i in (ncol(training) - 1):1){
+  if(sum(is.na(training[, i])) > (0.9*ncol(training))) 
+  {
+    training <- training[, -i]
+    testing <- testing[, -i]
+  }
+}
+
+# Other variables can also be dropped, since they don't have much info (as seen with the "summary" command):
+training <- subset(training, select = -c(kurtosis_yaw_belt, skewness_yaw_belt, amplitude_yaw_belt, skewness_yaw_forearm,
+kurtosis_yaw_dumbbell, skewness_yaw_dumbbell, amplitude_yaw_dumbbell, kurtosis_yaw_forearm, amplitude_yaw_forearm))
+testing <- subset(testing, select = -c(kurtosis_yaw_belt, skewness_yaw_belt, amplitude_yaw_belt, skewness_yaw_forearm,
+kurtosis_yaw_dumbbell, skewness_yaw_dumbbell, amplitude_yaw_dumbbell, kurtosis_yaw_forearm, amplitude_yaw_forearm))
+
+# The variables with "near zero variability" should also be removed:
+# nsv <- nearZeroVar(training, saveMetrics = TRUE)
+training <- subset(training, select = -c(new_window, kurtosis_roll_belt, kurtosis_picth_belt, skewness_roll_belt, skewness_roll_belt.1,
+max_yaw_belt, min_yaw_belt, kurtosis_roll_arm, kurtosis_picth_arm, kurtosis_yaw_arm, skewness_roll_arm, skewness_pitch_arm, skewness_yaw_arm,
+kurtosis_roll_dumbbell, kurtosis_picth_dumbbell, skewness_roll_dumbbell, skewness_pitch_dumbbell, max_yaw_dumbbell, min_yaw_dumbbell,
+kurtosis_roll_forearm, kurtosis_picth_forearm, skewness_roll_forearm, skewness_pitch_forearm, max_yaw_forearm, min_yaw_forearm))
+testing <- subset(testing, select = -c(new_window, kurtosis_roll_belt, kurtosis_picth_belt, skewness_roll_belt, skewness_roll_belt.1,
+max_yaw_belt, min_yaw_belt, kurtosis_roll_arm, kurtosis_picth_arm, kurtosis_yaw_arm, skewness_roll_arm, skewness_pitch_arm, skewness_yaw_arm,
+kurtosis_roll_dumbbell, kurtosis_picth_dumbbell, skewness_roll_dumbbell, skewness_pitch_dumbbell, max_yaw_dumbbell, min_yaw_dumbbell,
+kurtosis_roll_forearm, kurtosis_picth_forearm, skewness_roll_forearm, skewness_pitch_forearm, max_yaw_forearm, min_yaw_forearm))
+
+# The "factor" variables with too many values can be modified as numeric:
+for(i in 1:(ncol(training) - 1)){
+  if((class(training[, i]) == "factor") & length(table(training[, i])) > 30)
+  {
+    training[, i] <- as.numeric(training[, i])
+    testing[, i] <- as.numeric(testing[, i])
+  }
+}
+
+```
+
+## Variables correlation
+In order to reduce the harmful correlation between the predictors, the following procedure was performed:  
+- The variables for which a correlation amongst themselves higher than .8 were identified  
+- Principal Components Analysis was performed in order to combine some of these variables into a set of fewer variables, while keeping most of the variability. For each cluster of correlated variables, 2 PCA variables were created, and the original variables were dropped.  
+
+At the end of this step, 49 predictors were left, and those are the ones I used to find the best machine learning method to predict the "classe" response.  
+
+Here is the code that was used:
+
+```{r}
+
+M <- abs(cor(training[, 2:53]))
+diag(M) <- 0
+which(M > 0.8, arr.ind = T)
+
+prComp1 <- prcomp(training[, c(2, 4, 5, 10, 11)])
+prComp1$rotation
+summary(prComp1)
+training$prcomp11 <- 0.42189220*training$roll_belt + 0.58805840*training$yaw_belt + 0.05044433*training$total_accel_belt + 0.16877482*training$accel_belt_y - 0.66720665*training$accel_belt_z
+testing$prcomp11 <- 0.42189220*testing$roll_belt + 0.58805840*testing$yaw_belt + 0.05044433*testing$total_accel_belt + 0.16877482*testing$accel_belt_y - 0.66720665*testing$accel_belt_z
+training$prcomp12 <- 0.22569540*training$roll_belt - 0.79930007*training$yaw_belt + 0.03710719*training$total_accel_belt + 0.25223234*training$accel_belt_y - 0.49515945*training$accel_belt_z
+testing$prcomp12 <- 0.22569540*testing$roll_belt - 0.79930007*testing$yaw_belt + 0.03710719*testing$total_accel_belt + 0.25223234*testing$accel_belt_y - 0.49515945*testing$accel_belt_z
+training <- subset(training, select = -c(roll_belt, yaw_belt, total_accel_belt, accel_belt_y, accel_belt_z))
+testing <- subset(testing, select = -c(roll_belt, yaw_belt, total_accel_belt, accel_belt_y, accel_belt_z))
+
+prComp2 <- prcomp(training[, c(2, 6, 7)])
+prComp2$rotation
+summary(prComp2)
+training$prcomp21 <- -0.2835199*training$pitch_belt + 0.3791018*training$accel_belt_x + 0.8808509*training$magnet_belt_x
+testing$prcomp21 <- -0.2835199*testing$pitch_belt + 0.3791018*testing$accel_belt_x + 0.8808509*testing$magnet_belt_x
+training$prcomp22 <- -0.5219898*training$pitch_belt + 0.7095320*training$accel_belt_x -0.4733824*training$magnet_belt_x
+testing$prcomp22 <- -0.5219898*testing$pitch_belt + 0.7095320*testing$accel_belt_x -0.4733824*testing$magnet_belt_x
+training <- subset(training, select = -c(pitch_belt, accel_belt_x, magnet_belt_x))
+testing <- subset(testing, select = -c(pitch_belt, accel_belt_x, magnet_belt_x))
+
+```
+
+## Machine Learning Model Selection
+Many methods from the Caret package were tested. To test if a specific method worked well, I applied the "predict" function to the "testing" dataset, and then looked at the confusion matrix (especially the "accuracy" figure). For example, for the best model I could find, here is the code that was used:
+
+```{r}
+set.seed(458)
+
+# To help performance, a cluster of processes will be used when constructing the models:
+library(doParallel)
+library(parallel)
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+
+modFitsvmRadial <- train(classe ~ ., method = "svmRadial", data = training, trControl = fitControl, preProcess = c("center", "scale"))
+predictsvmRadial <- predict(modFitsvmRadial, testing)
+confusionMatrix(predictsvmRadial, testing$classe)
+```
+
+## Conclusion
+
+Even though the "svmRadial" is possibly not the best one to predict the "classe", I find it precise enough (around 93%) to hopefully be able to predict 19 out of 20 results from the provided testing data. 
